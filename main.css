@@ -62,6 +62,7 @@ p {
 .left {
     width: 45%;
     float: left;
+    clear: left;
 }
 
 .right {

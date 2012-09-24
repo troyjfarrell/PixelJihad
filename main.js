@@ -11,6 +11,12 @@ window.onload = function() {
     // add action to the decode button
     var decodeButton = document.getElementById('decode');
     decodeButton.addEventListener('click', decode);
+
+    // add action to the analyze button
+    var decodeButton = document.getElementById('analyze');
+    decodeButton.addEventListener('click', analyze);
+    // necessary because the button doesn't have any input elements with it
+    decodeButton.disabled = false;
 };
 
 // artificially limit the message size
@@ -140,6 +146,183 @@ var decode = function() {
         };
         document.getElementById('messageDecoded').innerHTML = escHtml(obj.text);
     }
+};
+
+var analyze = function() {
+    // elements
+    var analysis = document.getElementById('analysis');
+    var button = document.getElementById('analyze');
+    var canvas = document.getElementById('canvas');
+
+    // image data
+    var ctx = canvas.getContext('2d');
+    var pixelCount = ctx.canvas.width * ctx.canvas.height;
+    var pixelSize = 4; // RGBA
+    var imgData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    // analysis data
+    var aCtx = analysis.getContext('2d');
+    analysis.width = imgData.width;
+    analysis.height = imgData.height;
+    var aImgData = aCtx.getImageData(0, 0, imgData.width, imgData.height);
+    var aData = aImgData.data;
+
+    button.disabled = true;
+
+    var previ = 0;
+
+    // iterate over the rows of the image
+    for(var i = 0; i < imgData.height; i++)
+    {
+        // iterate over the pixels of this row
+        for(var j = 0; j < imgData.width; j++)
+        {
+            var alphaIndex = getIndexForXYChannel(j, i, 3, imgData.width);
+            var alphaValue = imgData.data[alphaIndex];
+            aData[alphaIndex] = 0xff;
+            
+            // If this pixel is not opaque, skip it.
+            if (0xff != alphaValue)
+            {
+                aData[alphaIndex - 3] = 0x00;
+                aData[alphaIndex - 2] = 0x00;
+                aData[alphaIndex - 1] = 0x00;
+                continue;
+            }
+
+            var suspectPixelCount = 0;
+
+            // iterate over the chanels of this pixel
+            // (pixelSize - 1) is to exclude the alpha channel
+            for(var k = 0; k < (pixelSize - 1); k++)
+            {
+                // shortcut
+                if (suspectPixelCount > 1)
+                {
+                    continue;
+                }
+
+                var pcd = getPixelChannelData(imgData, j, i, k);
+                // If only the least-significant bit of the pixel channel data
+                // differs from most of the surrounding pixels, the pixel may
+                // be hiding information.
+                var matchCount = 0;
+                var pixelValue = pcd.pixelChannelValue;
+                for(var m = 0; m < pcd.surroundingChannelValues.length; m++)
+                {
+                    var otherPCV = pcd.surroundingChannelValues[m];
+                    if ((pixelValue >> 1) == (otherPCV >> 1) &&
+                        (pixelValue & 0x1) != (otherPCV & 0x1))
+                    {
+                        matchCount++;
+                    }
+                }
+
+                if (!!Math.round(matchCount / m))
+                {
+                    suspectPixelCount++;
+                    if (suspectPixelCount > 1)
+                    {
+                        // If this pixel is already marked as suspect, then it
+                        // may really be at a color boundary in the image.
+                        for(var n = 0; n < k; n++)
+                        {
+                            var width = imgData.width;
+                            aData[getIndexForXYChannel(j, i, n, width)] = 0x00;
+                        }
+                    }
+                    else
+                    {
+                        // mark the value suspect in the analysis
+                        aData[pcd.pixelChannelIndex] = 0xff;
+                    }
+                }
+                else
+                {
+                    aData[pcd.pixelChannelIndex] = 0x00;
+                }
+            }
+        }
+    }
+
+    aCtx.putImageData(aImgData, 0, 0);
+
+    button.disabled = false;
+    window.location = analysis.toDataURL();
+};
+
+// get data for one channel of one pixel
+var getPixelChannelData = function(imgData, x, y, channel) {
+    var width = imgData.width;
+    var pixelChannelIndex = getIndexForXYChannel(x, y, channel, width);
+    var pixelChannelValue = imgData.data[pixelChannelIndex];
+
+    // surrounding pixel channel values
+    var sPCVs = [];
+    var pixelIndex = 0;
+    // row above
+    if (y > 0)
+    {
+        // pixel above and to the left
+        if (x > 0)
+        {
+            pixelIndex = getIndexForXYChannel(x - 1, y - 1, channel, width);
+            sPCVs.push(imgData.data[pixelIndex]);
+        }
+        // pixel above
+        pixelIndex = getIndexForXYChannel(x, y - 1, channel, width);
+        sPCVs.push(imgData.data[pixelIndex]);
+        // pixel above and to the right
+        if (x < imgData.width - 1)
+        {
+            pixelIndex = getIndexForXYChannel(x + 1, y - 1, channel, width);
+            sPCVs.push(imgData.data[pixelIndex]);
+        }
+    }
+    // pixel to the left
+    if (x > 0)
+    {
+        pixelIndex = getIndexForXYChannel(x - 1, y, channel, width);
+        sPCVs.push(imgData.data[pixelIndex]);
+    }
+    // pixel to the right
+    if (x < imgData.width - 1)
+    {
+        pixelIndex = getIndexForXYChannel(x + 1, y, channel, width);
+        sPCVs.push(imgData.data[pixelIndex]);
+    }
+    // row below
+    if (y < imgData.height - 1)
+    {
+        // pixel below and to the left
+        if (x > 0)
+        {
+            pixelIndex = getIndexForXYChannel(x - 1, y + 1, channel, width);
+            sPCVs.push(imgData.data[pixelIndex]);
+        }
+        // pixel below 
+        pixelIndex = getIndexForXYChannel(x - 1, y, channel, width);
+        sPCVs.push(imgData.data[pixelIndex]);
+        // pixel below and to the right
+        if (x < imgData.width - 1)
+        {
+            pixelIndex = getIndexForXYChannel(x + 1, y + 1, channel, width);
+            sPCVs.push(imgData.data[pixelIndex]);
+        }
+    }
+
+    var result = {
+        pixelChannelIndex: pixelChannelIndex,
+        pixelChannelValue: pixelChannelValue,
+        surroundingChannelValues: sPCVs
+    };
+    return result;
+};
+
+// get pixel channel index
+var getIndexForXYChannel = function (x, y, channel, width) {
+    var pixelSize = 4;
+    return (y * width * pixelSize) + (x * pixelSize) + channel;
 };
 
 // returns a 1 or 0 for the bit in 'location'
